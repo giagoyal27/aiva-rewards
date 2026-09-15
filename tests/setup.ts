@@ -6,7 +6,6 @@ import { beforeAll, beforeEach, afterAll } from "vitest";
 const TEST_DB_PATH = path.resolve(__dirname, "./test.db");
 process.env.DATABASE_URL = `file:${TEST_DB_PATH}`;
 process.env.AUTH_SECRET = "test-secret-key-not-for-production-use-only";
-process.env.NODE_ENV = "development";
 
 // Fresh schema for the whole test run.
 beforeAll(() => {
