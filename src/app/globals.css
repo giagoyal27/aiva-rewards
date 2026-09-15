@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-display: "Cormorant Garamond", Georgia, serif;
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+}
+
+body {
+  background-color: #fdfbf8;
+  color: #2b2320;
+}
+
+@layer components {
+  .aiva-card {
+    @apply bg-white rounded-xl2 shadow-soft border border-aiva-line p-6;
+  }
+
+  .aiva-btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-full bg-aiva-ink text-white px-6 py-3.5
+      font-medium tracking-wide transition-all duration-200
+      hover:bg-black active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none;
+  }
+
+  .aiva-btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-full bg-aiva-blush text-aiva-ink px-6 py-3.5
+      font-medium tracking-wide transition-all duration-200
+      hover:bg-aiva-blushDark active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none;
+  }
+
+  .aiva-input {
+    @apply w-full rounded-2xl border border-aiva-line bg-white px-4 py-3.5 text-aiva-ink placeholder:text-aiva-muted
+      focus:outline-none focus:ring-2 focus:ring-aiva-blushDark/50 transition-shadow;
+  }
+
+  .aiva-label {
+    @apply block text-sm font-medium text-aiva-muted mb-1.5;
+  }
+
+  .aiva-pill {
+    @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium;
+  }
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.4s ease-out both;
+}

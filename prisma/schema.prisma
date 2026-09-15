@@ -1,0 +1,221 @@
+// ============================================================
+// AIVA Rewards — Database Schema
+//
+// Default datasource is SQLite (zero-setup, file-based) which is ideal
+// for local development and small production deployments. To use
+// Postgres instead, change `provider = "sqlite"` to `provider = "postgresql"`
+// and point DATABASE_URL at your Postgres instance.
+//
+// NOTE ON ENUMS: SQLite's Prisma connector does not support native enum
+// types, so every "enum-like" field below is a plain String with its
+// allowed values documented in a comment and enforced in application
+// code (see the corresponding TypeScript union types in src/lib/*.ts
+// and the zod schemas in src/lib/validation.ts). If you migrate to
+// Postgres, you can optionally convert these back to real `enum`
+// blocks — the string values are identical either way.
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------------------------------
+// ADMIN — staff / dashboard users. Fully separate from customers.
+// ------------------------------------------------------------------
+model Admin {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         String   @default("STAFF") // "SUPER_ADMIN" | "STAFF"
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  approvedRequests   PurchaseRequest[] @relation("ApprovedBy")
+  manualPurchases    Purchase[]        @relation("AddedByAdmin")
+  redemptions        RewardRedemption[] @relation("RedeemedByAdmin")
+  auditLogs          AuditLog[]        @relation("AdminActor")
+}
+
+// ------------------------------------------------------------------
+// CUSTOMER — the authoritative digital record for a loyalty member.
+// ------------------------------------------------------------------
+model Customer {
+  id           String   @id @default(cuid())
+  name         String
+  mobileNumber String   @unique
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  card              LoyaltyCard?
+  purchaseRequests  PurchaseRequest[]
+  purchases         Purchase[]
+  cycles            LoyaltyCycle[]
+  auditLogs         AuditLog[]        @relation("CustomerActor")
+}
+
+// ------------------------------------------------------------------
+// LOYALTY CARD — the physical card's unique identifier.
+// The card itself is never the source of truth; it only links to the
+// authoritative Customer + LoyaltyCycle records.
+// ------------------------------------------------------------------
+model LoyaltyCard {
+  id         String     @id @default(cuid())
+  cardNumber String     @unique // e.g. AIVA-00427
+  status     String     @default("UNASSIGNED")
+  // "UNASSIGNED" | "ACTIVE" | "LOST" | "REPLACED" | "DEACTIVATED"
+  customerId String?    @unique
+  customer   Customer?  @relation(fields: [customerId], references: [id])
+  issuedAt   DateTime   @default(now())
+  assignedAt DateTime?
+  deactivatedAt DateTime?
+  replacedByCardId String? @unique
+  notes      String?
+
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+}
+
+// ------------------------------------------------------------------
+// LOYALTY CYCLE — one full 1-10 purchase journey. A customer can have
+// many cycles over time; history is always preserved.
+// ------------------------------------------------------------------
+model LoyaltyCycle {
+  id           String    @id @default(cuid())
+  customerId   String
+  customer     Customer  @relation(fields: [customerId], references: [id])
+  cycleNumber  Int // 1, 2, 3... per customer
+  status       String    @default("ACTIVE") // "ACTIVE" | "COMPLETED"
+  startedAt    DateTime  @default(now())
+  completedAt  DateTime?
+
+  purchases        Purchase[]
+  purchaseRequests PurchaseRequest[]
+  redemptions      RewardRedemption[]
+
+  @@unique([customerId, cycleNumber])
+}
+
+// ------------------------------------------------------------------
+// PURCHASE REQUEST — created when a customer taps "I MADE A PURCHASE".
+// Admin must approve or reject; it never auto-completes.
+// ------------------------------------------------------------------
+model PurchaseRequest {
+  id            String   @id @default(cuid())
+  customerId    String
+  customer      Customer @relation(fields: [customerId], references: [id])
+  cycleId       String
+  cycle         LoyaltyCycle @relation(fields: [cycleId], references: [id])
+  purchaseNumber Int  // which slot (1-10) this request is aiming to fill
+  status        String   @default("PENDING") // "PENDING" | "APPROVED" | "REJECTED"
+  rejectionReason String?
+
+  approvedById  String?
+  approvedBy    Admin?   @relation("ApprovedBy", fields: [approvedById], references: [id])
+  decidedAt     DateTime?
+
+  resultingPurchaseId String?  @unique
+  resultingPurchase   Purchase? @relation("RequestToPurchase", fields: [resultingPurchaseId], references: [id])
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// ------------------------------------------------------------------
+// PURCHASE — a permanently recorded, approved purchase. Increases the
+// loyalty count and unlocks the associated reward.
+// ------------------------------------------------------------------
+model Purchase {
+  id             String   @id @default(cuid())
+  customerId     String
+  customer       Customer @relation(fields: [customerId], references: [id])
+  cycleId        String
+  cycle          LoyaltyCycle @relation(fields: [cycleId], references: [id])
+  purchaseNumber Int // 1-10 within the cycle
+  source         String   // "CUSTOMER_REQUEST_APPROVED" | "ADMIN_MANUAL"
+  orderReference String?
+  notes          String?
+
+  addedByAdminId String?
+  addedByAdmin   Admin?   @relation("AddedByAdmin", fields: [addedByAdminId], references: [id])
+
+  request        PurchaseRequest? @relation("RequestToPurchase")
+
+  reward         RewardRedemption?
+
+  createdAt      DateTime @default(now())
+
+  @@unique([cycleId, purchaseNumber])
+}
+
+// ------------------------------------------------------------------
+// REWARD RULE — configurable reward for each purchase position (1-10).
+// Seeded with the exact default AIVA structure; editable via admin
+// settings, but the *positions* (1-10) are fixed.
+// ------------------------------------------------------------------
+model RewardRule {
+  id             String   @id @default(cuid())
+  purchaseNumber Int      @unique // 1-10
+  type           String   // "DISCOUNT_PERCENTAGE" | "PHYSICAL_GIFT" | "SURPRISE" | "NO_REWARD"
+  displayLabel   String   // e.g. "10% OFF", "Keep Going", "Free Jewellery Organizer"
+  value          Int?     // numeric value, e.g. 10 for 10% off. Null for non-numeric rewards.
+  updatedAt      DateTime @updatedAt
+}
+
+// ------------------------------------------------------------------
+// REWARD REDEMPTION — tracks the lifecycle of a reward attached to one
+// specific completed Purchase (LOCKED is implicit/not stored; a row is
+// only created once the purchase exists, i.e. the reward is UNLOCKED).
+// ------------------------------------------------------------------
+model RewardRedemption {
+  id            String   @id @default(cuid())
+  purchaseId    String   @unique
+  purchase      Purchase @relation(fields: [purchaseId], references: [id])
+  cycleId       String
+  cycle         LoyaltyCycle @relation(fields: [cycleId], references: [id])
+  purchaseNumber Int
+  type          String   // "DISCOUNT_PERCENTAGE" | "PHYSICAL_GIFT" | "SURPRISE" | "NO_REWARD"
+  displayLabel  String
+  value         Int?
+  status        String   @default("UNLOCKED") // "UNLOCKED" | "REDEEMED"
+
+  redeemedAt    DateTime?
+  redeemedById  String?
+  redeemedBy    Admin?   @relation("RedeemedByAdmin", fields: [redeemedById], references: [id])
+
+  createdAt     DateTime @default(now())
+}
+
+// ------------------------------------------------------------------
+// SYSTEM SETTINGS — single-row configuration table (brand + social links).
+// ------------------------------------------------------------------
+model SystemSettings {
+  id                String  @id @default("singleton")
+  brandName         String  @default("AIVA")
+  instagramUrl      String  @default("https://instagram.com/aivasilver")
+  facebookUrl       String  @default("")
+  googleReviewUrl   String  @default("")
+  updatedAt         DateTime @updatedAt
+}
+
+// ------------------------------------------------------------------
+// AUDIT LOG — traceability for every important business action.
+// ------------------------------------------------------------------
+model AuditLog {
+  id           String   @id @default(cuid())
+  action       String   // e.g. "PURCHASE_APPROVED", "CARD_ASSIGNED"
+  adminId      String?
+  admin        Admin?   @relation("AdminActor", fields: [adminId], references: [id])
+  customerId   String?
+  customer     Customer? @relation("CustomerActor", fields: [customerId], references: [id])
+  entityType   String?  // e.g. "Purchase", "LoyaltyCard"
+  entityId     String?
+  metadata     String?  // JSON-encoded free-form details
+  createdAt    DateTime @default(now())
+}
