@@ -15,10 +15,10 @@ export async function GET() {
     color: { dark: "#2b2320", light: "#fdfbf8" },
   });
 
-  return new Response(pngBuffer, {
-    headers: {
-      "Content-Type": "image/png",
-      "Cache-Control": "public, max-age=86400",
-    },
-  });
+  return new Response(new Uint8Array(pngBuffer), {
+  headers: {
+    "Content-Type": "image/png",
+    "Cache-Control": "public, max-age=86400",
+  },
+});
 }
